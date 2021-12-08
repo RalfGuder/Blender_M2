@@ -1,6 +1,4 @@
 
-from . import m2_format
-from .m2_format import *
 
 #from . import BSP_Tree
 #from .BSP_Tree import *
@@ -14,15 +12,108 @@ from math import *
 import bmesh
 from mathutils import Vector
 import os
+import m2_format
+from m2_format import M2Header, M2SkinProfile
 
 class M2File:
+    
     def __init__(self):
         self.header = M2Header()
-
+        self.context = None
+        self.scene = None
+        self.modelname = ""
+        self.arm = None
+        self.rig = None
+        self.path = ""
+        
     def read(self, f):        
+        self.path = os.path.dirname(f.name)
         self.header.read(f) 
     
+        # Modellnamen aus dem Header lesen,
+        # Hinweis:
+        #   Dies ist eine Null-Teminiertere Zeichenfolge
+        for i in range(len(self.header.name) - 1):
+             self.modelname += self.header.name[i].decode("utf-8")
+
+    def createBlender(self):
+        self.context = bpy.context
+        self.scene = self.context.scene
+
+        
+        self.arm = bpy.data.armatures.new(self.modelname + ".Skelett")
+        self.rig = bpy.data.objects.new(self.modelname + ".Skelett", self.arm)
+        self.rig.location = (0, 0, 0)
+        #rig.show_x_ray = self.enable_armature_xray
+        #armature.show_names = self.display_bone_names
+
+        # Link the object to the scene
+        self.scene.collection.objects.link(self.rig)
+        self.context.view_layer.objects.active = self.rig
+        
+        self.createBones()
+    
+    
+    def createBones(self):
+        """
+            Erstellt die Bones für das aktuelle M2-Modell
+        """
+        kb_txt = ("ArmL", "ArmR", "ShoulderL", "ShoulderR", "Upper Body", "Waist", "Head", "Jaw", "IndexFingerR", 
+                "MiddleFingerR", "PinkyFingerR", "RingFingerR", "ThumbR", "IndexFingerL", "MiddleFingerL", "PinkyFingerL", 
+                "RingFingerL", "ThumbL", "$BTH", "$CSR", "$CSL", "_Breath", "_Name", "_NameMount", "$CHD",
+                "$CCH", "Root")
+        
+        bpy.ops.object.mode_set(mode='EDIT') # Blender in Bearbeitungsmodus  
+        ebs = self.arm.edit_bones
+        
+        # Liste der Blender-Bones
+        self.eblist = []
+        
+        # Bones erzeugen
+        print("Create Bones")
+        for i in range(0, len(self.header.bones)):
+            eb = ebs.new(f"Bone_{i:03d}")
+            self.eblist.append(eb)
+
+        # Parent - Child Verhältnis        
+        print("Verknüpfe Bones")
+        for i in range(0, len(self.header.bones)):
+            eb = self.eblist[i]
+            b = self.header.bones[i]
+            pivot = Vector(b.pivot)
+            if b.parent_bone == -1:
+                eb.head = pivot
+                eb.tail = eb.head + Vector((0,0.25,0))
+            else:
+                eb.parent = self.eblist[b.parent_bone]
+                eb.head = pivot
+                eb.tail = pivot + Vector((0,0.25,0))
+                # Need to check for this because blender removes zero-length bones
+                newbone = self.eblist[b.parent_bone].head - eb.head
+                if newbone.length < 0.001:
+                    self.eblist[b.parent_bone].tail = eb.head + Vector((0,0.1,0))
+                else:
+                    self.eblist[b.parent_bone].tail = eb.head
+
+        # Key-Bones verarbeiten
+        kb = self.header.key_bone_lookup
+        for i in range(0, len(kb)):
+            if kb[i] != 65535: 
+                eb = self.eblist[kb[i]]
+                
+                # Namen des Knochen anpassen
+                #eb.name = kb_txt[i]
+            
+        
+        # die Bones als Sticks darstellen
+        self.arm.display_type = "STICK"
+        #self.scene.update()            
+
     def loadMaterials(self, name):
+        texturePath = "XXX"
+        file_format = "xx"
+
+        
         self.materials = {}
 
         images = []
@@ -173,11 +264,13 @@ class M2File:
         
         new_obj = obj.copy()
         new_obj.data = obj.data.copy()
-        bpy.context.scene.objects.link(new_obj)
+        #bpy.context.scene.objects.link(new_obj)
         bpy.context.scene.objects.active = new_obj
         
         mesh = new_obj.data
         original_mesh = obj.data
+        
+        
 class M2SkinFile:
     def __init__(self):
         self.skin = M2SkinProfile()
@@ -186,34 +279,28 @@ class M2SkinFile:
         self.skin.read(f)
 
     def draw_submesh(self, m2_file):
-        # Create the blender armature and object
-        mesh_name = "model"
-        armature = bpy.data.armatures.new('%s_Armature' % mesh_name)
-        rig = bpy.data.objects.new(mesh_name, armature)
-        rig.location = (0, 0, 0)
-        #rig.show_x_ray = self.enable_armature_xray
-        #armature.show_names = self.display_bone_names
-
-        # Link the object to the scene
-        scene = bpy.context.scene
-        scene.objects.link(rig)
-        scene.objects.active = rig
-        scene.update()
         
-        bpy.ops.object.mode_set(mode='OBJECT')
+        self.eblist = m2_file.eblist
+        self.arm = m2_file.arm
+        self.rig = m2_file.rig
+        
+        # Create the blender armature and object
+        self.scene = m2_file.scene
+        
+        bpy.ops.object.mode_set(mode='OBJECT') # Blender in Objekt-Modus
         for submesh_index, submesh in enumerate(self.skin.submeshes):
             #print("  Creation of the submesh '%s'..." % submesh.name)
 
-            # Create the blender mesh and object                    
-            
-            mesh = bpy.data.meshes.new('Mesh_' + str(submesh_index))
-            obj = bpy.data.objects.new(str(submesh_index), mesh)
+            # Create the blender mesh and object
+            name = f"{m2_file.modelname}.Mesh.{submesh_index:03d}"                    
+            mesh = bpy.data.meshes.new(name)
+            obj = bpy.data.objects.new(name, mesh)
             obj.location = (0, 0, 0)
 
             # Link the object to the scene
-            scene.objects.link(obj)
-            scene.objects.active = obj
-            scene.update()
+            self.scene.collection.objects.link(obj)
+            #scene.objects.active = obj
+            #scene.update()
 
             # Retrieve the triangles of the submesh
             print("    - %s triangles, from %d" % (submesh.nTriangles, submesh.StartTriangle))
@@ -240,7 +327,7 @@ class M2SkinFile:
             for n, vertex in enumerate(mesh.vertices):
                 vertex.normal = submesh_vertices[n].normal
             
-            uv1 = mesh.uv_textures.new("UVMap")
+            uv1 = mesh.uv_layers.new(name="UVMap")
             uv_layer1 = mesh.uv_layers[0]
             for i in range(len(uv_layer1.data)):
                 uv = submesh_vertices[mesh.loops[i].vertex_index].tex_coords
@@ -251,8 +338,10 @@ class M2SkinFile:
             bones = []
             bone_groups = {}
             submesh_bone_table = m2_file.header.bone_lookup_table[submesh.StartBones:submesh.StartBones+submesh.nBones]
+          
             for bone_index in submesh_bone_table:
-                bones.insert(bone_index, m2_file.header.bones[bone_index])
+                # bones.insert(bone_index, m2_file.header.bones[bone_index])
+                bones.insert(bone_index, self.eblist[bone_index])
                 bone_groups[bone_index] = []
                         
             for vertex_index, vertex in enumerate(submesh_vertices):
@@ -261,6 +350,12 @@ class M2SkinFile:
                         bone_groups[bone_index].append((vertex_index, vertex.bone_weights[n] / 255))
 
             for bone_index in bone_groups.keys():
-                grp = obj.vertex_groups.new(str(bone_index))
+                grp = obj.vertex_groups.new(name=f"Bone_{bone_index:03d}")
                 for (v, w) in bone_groups[bone_index]:
-                    grp.add([v], w, 'REPLACE')                    
+                    grp.add([v], w, "REPLACE")           
+                    
+            obj.parent = self.rig
+            modifier = obj.modifiers.new(type='ARMATURE', name=self.arm.name)
+            modifier.object = self.rig  
+            
+                
