@@ -23,7 +23,7 @@ bl_info = {
     "name": "Wow M2 format (.m2)",
     "author": "Miton",
     "version": (0, 1),
-    "blender": (2, 57, 0),
+    "blender": (2, 80, 0),
     "location": "File > Import-Export > Wow M2 (.M2) ",
     "description": "Import-Export Wow M2",
     "warning": "",
@@ -53,9 +53,7 @@ class M2Importer(bpy.types.Operator):
     bl_label = "Import M2"
     bl_options = {'UNDO'}
 
-    filepath = StringProperty(
-            subtype='FILE_PATH',
-            )
+    filepath = StringProperty(subtype='FILE_PATH',)
     filter_glob = StringProperty(default="*.m2", options={'HIDDEN'})
 
     def execute(self, context):
@@ -100,18 +98,23 @@ def menu_export(self, context):
 
 
 def register():
-    bpy.utils.register_module(__name__)
+    bpy.utils.register_class(M2Exporter)
+    bpy.utils.register_class(M2Importer)
     #wow_custom_ui.register()
 
-    bpy.types.INFO_MT_file_import.append(menu_import)
+    bpy.types.TOPBAR_MT_file_import.append(menu_import)
+
     #bpy.types.INFO_MT_file_export.append(menu_export)
 
 
 def unregister():
-    bpy.utils.unregister_module(__name__)
+    bpy.utils.unregister_class(M2Exporter)
+    bpy.utils.unregister_class(M2Importer)
+
     #wow_custom_ui.unregister()
 
-    bpy.types.INFO_MT_file_import.remove(menu_import)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_import)
+    #bpy.types.INFO_MT_file_import.remove(menu_import)
     #bpy.types.INFO_MT_file_export.remove(menu_export)
 
 if __name__ == "__main__":

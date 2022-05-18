@@ -1,7 +1,10 @@
 import sys
-import bpy
 import struct
-from mathutils import Vector
+from mathutils import Vector, Matrix, Quaternion, Euler
+import math
+import mathutils
+
+
 
 '''
 class M2Loop:
@@ -16,15 +19,24 @@ class M2Loop:
 '''
 
 class C3Vector(Vector):       
-    def read(self,f):
+
+    def read(self, f):
         self.x = struct.unpack("f",f.read(4))[0]
         self.y = struct.unpack("f",f.read(4))[0]
         self.z = struct.unpack("f",f.read(4))[0]
+
 
     def write(self, f):
         f.write(struct.pack("f",self.x))
         f.write(struct.pack("f",self.y))
         f.write(struct.pack("f",self.z))
+
+class M2SplineKeyFloat:
+    def read(self,f):
+        self.value = struct.unpack("f",f.read(4))[0]
+
+    def write(self, f):
+        f.write(struct.pack("f",self.value))
 
 class M2SplineKeyVectors(list):
     def __init__(self):
@@ -49,18 +61,67 @@ class M2CompQuat:
         self.y = 0
         self.z = 0
         self.w = 0
-
+    
     def read(self,f):
+        def MakeFloat(v):
+#            return float(v / 32767.0) - 1.0; 
+            v = float(v)
+            f = float(0)
+            if v > 0:
+                f = float(v - 32767)
+            else:
+                f = float(v + 32767)
+
+            return float(f / 32767.0)
+        
         self.x = struct.unpack("h",f.read(2))[0]
         self.y = struct.unpack("h",f.read(2))[0]
         self.z = struct.unpack("h",f.read(2))[0]
         self.w = struct.unpack("h",f.read(2))[0]
+        
+        self.x = MakeFloat(self.x)
+        self.y = MakeFloat(self.y)
+        self.z = MakeFloat(self.z)
+        self.w = MakeFloat(self.w)
 
     def write(self, f):
         f.write(struct.pack("h",self.x))
         f.write(struct.pack("h",self.y))
         f.write(struct.pack("h",self.z))
         f.write(struct.pack("h",self.w))
+    
+
+    def to_angles(self):
+        angles = [0, 0, 0]
+        w = self.w
+        x = self.x
+        y = self.y
+        z = self.z
+        sqw = float(w * w)
+        sqx = float(x * x)
+        sqy = float(y * y)
+        sqz = float(z * z)
+        unit = float(sqx + sqy + sqz + sqw) # if normalized is one, otherwise is correction factor
+        test = float(x * y + z * w)
+        if (test > 0.499 * unit):  
+            # singularity at north pole
+            angles[1] = 2 * math.atan2(x, w)
+            angles[2] = math.pi/2
+            angles[0] = 0
+        elif (test < -0.499 * unit): 
+            # singularity at south pole
+            angles[1] = -2 * math.atan2(x, w)
+            angles[2] = -1 * math.pi / 2
+            angles[0] = 0
+        else:
+            angles[1] = math.atan2(2 * y * w - 2 * x * z, sqx - sqy - sqz + sqw) # roll or heading 
+            angles[2] = math.asin(2 * test / unit) # pitch or attitude
+            angles[0] = math.atan2(2 * x * w - 2 * y * z, -sqx + sqy - sqz + sqw) # yaw or bank
+        return angles
+    
+    def __str__(self):
+        msg = f"M2CompQuat(x={self.x}, y={self.y}, z={self.z}, w={self.w})"
+        return msg
 
 class CAaBox:
     def __init__(self):
@@ -76,6 +137,9 @@ class CAaBox:
         f.write(struct.pack('fff', self.max.x, self.max.y, self.max.z))
 
 class M2Array(list):
+    number: int
+    offset: int
+    type: str
     def __init__(self):
         super().__init__()
         self.number    = 0
@@ -86,21 +150,22 @@ class M2Array(list):
         self.number    = struct.unpack("i",f.read(4))[0]
         self.offset    = struct.unpack("i",f.read(4))[0]       
     
-    def fill(self,f,type,type2 = "I"):
-        self.type = type
+    def fill(self,f,m2_type,type2 = "I"):
+        if (self.number == 0): return 
+        self.type = m2_type
         oldpos = f.tell()
         f.seek(self.offset)
-        if(type == "M2Array"):
+        if(m2_type == "M2Array"):
             for i in range(0, self.number):
                 self.append(M2Array())
                 self[i].read(f)
                 self[i].fill(f, type2)
-        elif(len(type) == 1):            
+        elif(len(m2_type) == 1):            
             for i in range(0, self.number):
-                self.append(struct.unpack(type,f.read(struct.calcsize(type)))[0])
+                self.append(struct.unpack(m2_type,f.read(struct.calcsize(m2_type)))[0])
         else:
             for i in range(0, self.number):
-                self.append(getattr(sys.modules[__name__], type)())
+                self.append(getattr(sys.modules[__name__], m2_type)())
                 self[i].read(f)
         f.seek(oldpos)
     
@@ -113,7 +178,7 @@ class M2Array(list):
         f.seek(self.offset)
         if(self.type == "M2Array"):
             for i in range(0, self.number):
-                #self[i].offset ПРИДУМАТЬ КАК ПИСАТЬ В КОНЕЦ ФАЙЛА (ПРЕДВАРИТЕЛЬНЫЙ РАССЧЁТ РАЗМЕРА?)
+                #self[i].offset Ã�Å¸Ã�Â Ã�ËœÃ�â€�Ã�Â£Ã�Å“Ã�ï¿½Ã�Â¢Ã�Â¬ Ã�Å¡Ã�ï¿½Ã�Å¡ Ã�Å¸Ã�ËœÃ�Â¡Ã�ï¿½Ã�Â¢Ã�Â¬ Ã�â€™ Ã�Å¡Ã�Å¾Ã�ï¿½Ã�â€¢Ã�Â¦ Ã�Â¤Ã�ï¿½Ã�â„¢Ã�â€ºÃ�ï¿½ (Ã�Å¸Ã�Â Ã�â€¢Ã�â€�Ã�â€™Ã�ï¿½Ã�Â Ã�ËœÃ�Â¢Ã�â€¢Ã�â€ºÃ�Â¬Ã�ï¿½Ã�Â«Ã�â„¢ Ã�Â Ã�ï¿½Ã�Â¡Ã�Â¡Ã�Â§Ã�ï¿½Ã�Â¢ Ã�Â Ã�ï¿½Ã�â€”Ã�Å“Ã�â€¢Ã�Â Ã�ï¿½?)
                 self[i].write(f)
         elif(len(self.type) == 1):            
             for i in range(0, self.number):
@@ -163,6 +228,89 @@ class M2Track(M2TrackBase):
         
         self.timestamps.write(f)
         self.values.write(f)
+    
+    def getFrameNumber(self, animationSequence, time): 
+        '''
+        Returns the frame index that should be used for a given animation sequence
+        and time. If the given time value is not valid, -1 is returned. Invalid
+        times can be caused by timelines that have no data or where the time is
+        longer than the actual length of the animation time.
+
+        @param animationSequence
+            Which animation sequence to use.
+        @param time
+            The time
+
+         @return The frame index for the given time. If there is no timeline or the
+                 given time goes beyond the length of the animation, than -1 is
+                 returned.
+         '''
+        #
+        # Start advancing through the timeline data until we've reached the frame
+        # that we're supposed to be on. The frame we're on is the first frame
+        # who's time value is greater than the current time that we're searching
+        # for.
+        #
+        frame = 0
+        times = self.getTimelineTimes(animationSequence)
+        if (times == None):
+            return -1
+        
+        if (len(times) == 0):
+            return -1
+        
+        while (frame < len(times) and times[frame] <= time):
+            frame+=1;
+        
+        if frame <= len(times):
+            return frame -1
+        else:
+            return -1
+    
+     
+    def getTimelineTimes(self, animationSequence):
+        if (self.timestamps == None or animationSequence < 0 or animationSequence >= len(self.timestamps)):
+            return None
+        
+        return self.timestamps[animationSequence];
+    
+    def getKeyFrameDataValue(self, animationSequence, time):
+        '''
+        Returns the data value used for a particular animation sequence and time.
+        @param animationSequence
+        @param time
+
+        @return
+        '''
+        #
+        # Do we have any data to return, and, if so, is the animation sequence
+        # valid?
+        #
+        if (self.values == None or animationSequence < 0 or animationSequence >= len(self.values)):
+            return None
+        
+        #
+        # Get the frame number for this animation.
+        #
+        frame = self.getFrameNumber(animationSequence, time);
+        if (frame == -1):
+            return None
+        
+        #
+        # Interpolate the data from the current frame to the next frame.
+        #
+        interpolate = False
+        if (interpolate) :
+            t1 = self.timestamps[animationSequence][frame]
+            t2 = self.timestamps[animationSequence][frame + 1]
+            if (t2 - t1 != 0):
+                r = float(time - t1) / float(t2 - t1)
+
+                if (self.interpolation_type == 1):
+                    return self.interpolate(self.values[animationSequence][frame], self.values[animationSequence][frame + 1], r)
+
+        return self.values[animationSequence][frame];
+
         
 class M2Sequence:
     def __init__(self):
@@ -215,6 +363,32 @@ class M2Sequence:
         f.write(struct.pack('H', self.aliasNext))
 
 class M2CompBone:
+    FLAG_IGNORE_PARENT_TRANSLATE = 0x1
+    FLAG_IGNORE_PARENT_SCALE = 0x2
+    FLAG_IGNORE_PARENT_ROTATION = 0x4
+    FLAG_SPHERICAL_BILLBOARD = 0x8
+    FLAG_CYLINDRICAL_BILLBOARD_LOCK_X = 0x10
+    FLAG_CYLINDRICAL_BILLBOARD_LOCK_Y = 0x20
+    FLAG_CYLINDRICAL_BILLBOARD_LOCK_Z = 0x40
+    FLAG_TRANSFORMED = 0x200
+    FLAG_KINEMATIC_BONE = 0x400       # MoP+: allow physics to influence this bone
+    FLAG_HELMET_ANIM_SCALED = 0x1000  # set blend_modificator to helmetAnimScalingRec.m_amount for this bone
+    FLAG_SOMETHING_SEQUENCE_ID = 0x2000 # <=bfa+, parent_bone+submesh_id are a sequence id instead?!
+    
+    key_bone_id : int
+    flags       : int
+    parent_bone : int
+    submesh_id  : int
+    translation : M2Track
+    rotation    : M2Track
+    scale       : M2Track
+    pivot       : C3Vector
+    
+    lastCalcMatrix : Matrix
+    lastTranslation: Vector
+    lastRotation   : Quaternion
+    lastScaling    : Vector
+    
     def __init__(self):
         self.key_bone_id = 0
         self.flags       = 0
@@ -248,6 +422,191 @@ class M2CompBone:
         self.rotation.write(f,"M2CompQuat")
         self.scale.write(f,"C3Vector")
         self.pivot.write(f)
+    
+    def calculateMatrixJme(self, animationSequence, time) -> Matrix:
+        '''
+        Calculate the matrix for a given animation sequence and time.
+        
+        @param animationSequence
+        The animation sequence to calculate the matrix for.
+        @param time
+        The time into the animation sequence.
+        
+        @return
+        '''
+        def mult(in1, in2, store = None):
+            if (store == None):
+                store = mathutils.Matrix().to_4x4()
+
+            temp00 = in1[0][0] * in2[0][0] + in1[0][1] * in2[1][0] + in1[0][2] * in2[2][0] + in1[0][3] * in2[3][0]
+            temp01 = in1[0][0] * in2[0][1] + in1[0][1] * in2[1][1] + in1[0][2] * in2[2][1] + in1[0][3] * in2[3][1]
+            temp02 = in1[0][0] * in2[0][2] + in1[0][1] * in2[1][2] + in1[0][2] * in2[2][2] + in1[0][3] * in2[3][2]
+            temp03 = in1[0][0] * in2[0][3] + in1[0][1] * in2[1][3] + in1[0][2] * in2[2][3] + in1[0][3] * in2[3][3]
+        
+            temp10 = in1[1][0] * in2[0][0] + in1[1][1] * in2[1][0] + in1[1][2] * in2[2][0] + in1[1][3] * in2[3][0]
+            temp11 = in1[1][0] * in2[0][1] + in1[1][1] * in2[1][1] + in1[1][2] * in2[2][1] + in1[1][3] * in2[3][1]
+            temp12 = in1[1][0] * in2[0][2] + in1[1][1] * in2[1][2] + in1[1][2] * in2[2][2] + in1[1][3] * in2[3][2]
+            temp13 = in1[1][0] * in2[0][3] + in1[1][1] * in2[1][3] + in1[1][2] * in2[2][3] + in1[1][3] * in2[3][3]
+
+            temp20 = in1[2][0] * in2[0][0] + in1[2][1] * in2[1][0] + in1[2][2] * in2[2][0] + in1[2][3] * in2[3][0]
+            temp21 = in1[2][0] * in2[0][1] + in1[2][1] * in2[1][1] + in1[2][2] * in2[2][1] + in1[2][3] * in2[3][1]
+            temp22 = in1[2][0] * in2[0][2] + in1[2][1] * in2[1][2] + in1[2][2] * in2[2][2] + in1[2][3] * in2[3][2]
+            temp23 = in1[2][0] * in2[0][3] + in1[2][1] * in2[1][3] + in1[2][2] * in2[2][3] + in1[2][3] * in2[3][3]
+            
+            temp30 = in1[3][0] * in2[0][0] + in1[3][1] * in2[1][0] + in1[3][2] * in2[2][0] + in1[3][3] * in2[3][0]
+            temp31 = in1[3][0] * in2[0][1] + in1[3][1] * in2[1][1] + in1[3][2] * in2[2][1] + in1[3][3] * in2[3][1]
+            temp32 = in1[3][0] * in2[0][2] + in1[3][1] * in2[1][2] + in1[3][2] * in2[2][2] + in1[3][3] * in2[3][2]
+            temp33 = in1[3][0] * in2[0][3] + in1[3][1] * in2[1][3] + in1[3][2] * in2[2][3] + in1[3][3] * in2[3][3]
+        
+            store[0][0] = temp00
+            store[0][1] = temp01
+            store[0][2] = temp02
+            store[0][3] = temp03
+            store[1][0] = temp10
+            store[1][1] = temp11
+            store[1][2] = temp12
+            store[1][3] = temp13
+            store[2][0] = temp20
+            store[2][1] = temp21
+            store[2][2] = temp22
+            store[2][3] = temp23
+            store[3][0] = temp30
+            store[3][1] = temp31
+            store[3][2] = temp32
+            store[3][3] = temp33
+                
+            return store
+     
+        didTranslation = False
+        didRotation = False
+        didScaling = False
+        
+        '''
+            4x4 Matrix
+        '''
+        #m = Matrix.Translation((self.pivot.x, self.pivot.y, self.pivot.z)).to_4x4()
+        m = Matrix.Translation((self.pivot.x, self.pivot.y, self.pivot.z))
+        m = Matrix.Translation((0, 0, 0))
+        
+        
+        #
+        # Get the translation, rotation, and scaling vectors for the given
+        # animation sequence and time.  These values will be interpolated between
+        # the two frames that "surround" the time.
+        #
+        transVec = None
+        rotQuat = None
+        scaleVec = None
+        val = self.translation.getKeyFrameDataValue(animationSequence, time)
+        if val != None:
+            transVec = Vector((val.x, val.y, val.z))
+        
+        val = self.rotation.getKeyFrameDataValue(animationSequence, time)
+        if val != None:
+            angles = val.to_angles()
+            
+            msg = f"M2CompQuat(w={val.w:.6f}, x={val.x:.6f}, y={val.y:.6f}, z={val.z:.6f})"
+            #print(msg)
+            msg = f"M2CompQuat(yaw={math.degrees(angles[0])}, roll={math.degrees(angles[1])}, pitch={math.degrees(angles[2])})"
+            #print(msg)
+            rotQuat = Quaternion((val.w, val.x, val.y, val.z))
+            eul = rotQuat.to_euler("XZY")
+            
+            msg = f"CompQuat(yaw={math.degrees(eul[0])}, roll={math.degrees(angles[1])}, pitch={math.degrees(angles[2])})"
+            #print(msg)
+            
+        val = self.scale.getKeyFrameDataValue(animationSequence, time)
+        if val != None:
+            scaleVec = Vector((val.x, val.y, val.z))
+
+        #
+        # Calculate the translation part of the animation.
+        #
+        if (transVec != None) :
+            #
+            # Set the translation for the matrix.
+            ##
+            #transMat = Matrix.Translation(transVec).to_4x4()
+            transMat = Matrix.Translation(transVec)
+            
+            m = mult(m, transMat)
+            #m = m @ transMat
+            
+            didTranslation = True
+            self.lastTranslation = transVec
+        else :
+            self.lastTranslation = Vector();
+        
+        #
+        # Calculate the rotation part of the animation. Get the rotation quaternion
+        # for the given animation sequence.
+        #
+        if (rotQuat != None) :
+            #
+            # Get the rotation quaternion for this frame.
+            #
+            #rotMat = Matrix.Rotation(rotQuat.angle, 4, rotQuat.axis)
+            rotMat = rotQuat.to_matrix().to_4x4()
+            
+            m = mult(m, rotMat)
+            #m = m @ rotMat
+            
+            didRotation = True
+            self.lastRotation = rotQuat
+        else :
+            self.lastRotation = Quaternion();
+
+        #
+        # Calculate the scaling part of the animation.
+        #
+        if (scaleVec != None) :
+            if (scaleVec.x > 10) :
+                scaleVec.x = 1.0
+
+            if (scaleVec.y > 10) :
+                scaleVec.y = 1.0
+
+            if (scaleVec.z > 10) :
+                scaleVec.z = 1.0
+
+            #scaleMat = Matrix().to_4x4()
+            scaleMat = Matrix().to_4x4()
+            scaleMat = mult(scaleMat, Matrix.Scale(scaleVec.x, 4, Vector((1,0,0))))
+            scaleMat = mult(scaleMat, Matrix.Scale(scaleVec.y, 4, Vector((0,1,0))))
+            scaleMat = mult(scaleMat, Matrix.Scale(scaleVec.z, 4, Vector((0,0,1))))
+            
+            m = mult(m, scaleMat)
+            #m = m @ scaleMat
+            
+            self.lastScaling = scaleVec
+            didScaling = True
+        else :
+            self.lastScaling = Vector((1.0, 1.0, 1.0));
+
+        #
+        # If we didn't do anything, return a matrix set to an identity matrix.
+        #
+        if (didTranslation == False and didRotation == False and didScaling == False) :
+            m = mathutils.Matrix().to_4x4()
+        else :
+            #
+            # Finish up...
+            #
+            unpivot = Vector((-self.pivot.x, -self.pivot.y, -self.pivot.z))
+            unpivot = Vector((0, 0, 0))
+
+            #unpiv = Matrix.Translation(unpivot).to_4x4()
+            unpiv = Matrix.Translation(unpivot)
+            
+            m = mult(m, unpiv)
+            #m = m @ unpiv
+            
+        #
+        # Save the matrix.
+        #
+        self.lastCalcMatrix = m;
+        return m;        
+
 
 class M2Vertex:
     # 0x00  float   Position[3]         A vector to the position of the vertex.
@@ -298,6 +657,11 @@ class M2Color:
         self.alpha.write(f,"H")
 
 class M2Texture:
+    type: int
+    flags: int
+    filename: M2Array
+    size: int
+    
     def __init__(self):
         self.type     = 0
         self.flags    = 0
@@ -315,8 +679,14 @@ class M2Texture:
         f.write(struct.pack('I', self.flags))
         
         self.filename.write(f)
+        
+    def __str__(self):
+        return f'M2Texture(type={self.type}, flags={self.flags}, filename={self.filename})'
 
 class M2TextureWeight:
+    weight: M2Track
+    size: int
+    
     def __init__(self):
         self.weight = M2Track()
         self.size = 20
@@ -462,7 +832,7 @@ class M2Camera:
         self.position_base.read(f)
         self.target_position.read(f, "M2SplineKeyVectors")
         self.target_position_base.read(f)
-        self.roll.read(f, "C3Vector")
+        self.roll.read(f, "M2SplineKeyFloat")
 
     def write(self, f):
         f.write(struct.pack('I', self.type))
@@ -564,6 +934,7 @@ class M2Header:
         self.bones                           = M2Array()
         self.key_bone_lookup                 = M2Array()
         self.vertices                        = M2Array()
+        # Anzahl der Skin-Profile
         self.num_skin_profiles               = 0
         self.colors                          = M2Array()
         self.textures                        = M2Array()
@@ -587,7 +958,7 @@ class M2Header:
         self.attachment_lookup_table         = M2Array()
         self.events                          = M2Array()
         self.lights                          = M2Array()
-        self.cameras                         = M2Array()
+        self.cameras                         = M2Camera()
         self.camera_lookup_table             = M2Array()
         self.ribbon_emitters                 = M2Array()
         self.particle_emitters               = M2Array()
@@ -596,27 +967,34 @@ class M2Header:
 
     def read(self, f):
         self.magic = struct.unpack("I", f.read(4))[0]
+        print("Read Magic: Done!")
+        
         self.version = struct.unpack("I", f.read(4))[0]
+        print("Read Version: Done!")
         
         self.name.read(f)
         self.name.fill(f, "c")
-        print("Name")
+        print("Read Name: Done!")
         
         self.globalFlags = struct.unpack("I", f.read(4))[0]
-        print("Flags")
+        print("Read Global Flags: Done!")
 
         self.global_loops.read(f)
         self.global_loops.fill(f, "I")
+        print("Read Global Loops: Done!")
         
         self.sequences.read(f)
         self.sequences.fill(f, "M2Sequence")
-        print("Seq")
+        print("Read Sequences: Done!")
         
         self.sequence_lookups.read(f)
         self.sequence_lookups.fill(f, "H")
+        print("Read Sequence Lookups: Done!")
         
         self.bones.read(f)
         self.bones.fill(f, "M2CompBone")
+        self.bones.number
+        print("Read Bones: Done!")
         
         self.key_bone_lookup.read(f)
         self.key_bone_lookup.fill(f, "H")
@@ -687,16 +1065,16 @@ class M2Header:
         self.lights.fill(f, "M2Light")
         print("Light")
         
-        self.cameras.read(f)
-        self.cameras.fill(f, "M2Camera")
+#        self.cameras.read(f)
+#        self.cameras.fill(f, "M2Camera")
         
-        self.camera_lookup_table.read(f)
-        self.camera_lookup_table.fill(f, "H")
+#        self.camera_lookup_table.read(f)
+#        self.camera_lookup_table.fill(f, "H")
         
-        self.ribbon_emitters.read(f)
-        self.ribbon_emitters.fill(f, "M2Ribbon")
+#        self.ribbon_emitters.read(f)
+#        self.ribbon_emitters.fill(f, "M2Ribbon")
         
-        self.particle_emitters.read(f)
+        #self.particle_emitters.read(f)
         #self.particle_emitters.fill(f, "M2Particle")
         
         #self.blend_map_overrides.read(f)

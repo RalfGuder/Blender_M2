@@ -1,7 +1,3 @@
-from pywowlib.file_formats.wow_common_types import M2Versions
-from pywowlib.m2_file import M2File
-from pywowlib.wdbx.dbd_parser import parse_dbd_directory
-from pywowlib.wdbx.wdbc import DBCFile
 import csv
 import sqlite3
 import os
@@ -9,6 +5,7 @@ import os
 from dbcpy.dbc_file import DBCFile
 import dbcpy.records
 import configparser
+import mathutils
 
 
 
@@ -179,17 +176,26 @@ def main(config):
     contains(result, "creature/raptor/raptor.m2")
     """
     
-
+def matrix_test():
+    mat1 : mathutils.Matrix
+    mat2 : mathutils.Matrix
     
+    mat1 = mathutils.Matrix.to_4x4()
+    mat1[0][0:4] = 1.4, 0, 0, 0
+    mat2 = mathutils.Matrix.to_4x4()
     
+    mat3 = mat1 @ mat2
+    
+    print(mat3)
 
 if __name__ == "__main__":
+    '''
     conf = configparser.ConfigParser()
     conf.read("config.ini", "utf-8")
     
     main(conf)
-    
-    
+    '''
+    matrix_test()
     
     #with sqlite3.connect(db) as con:
         #createTable(con, "ItemDisplayInfo")
